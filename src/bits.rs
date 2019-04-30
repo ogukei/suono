@@ -19,7 +19,7 @@ pub trait BitRead {
 }
 
 pub struct BitReader<'a, Source> {
-    source: &'a mut Source,
+    pub(super) source: &'a mut Source,
     queue: u64,
     queue_count: isize
 }

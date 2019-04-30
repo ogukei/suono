@@ -1,38 +1,61 @@
 
-use super::bits::BitRead;
+use super::decode::Decode;
 use super::error::{Error, ErrorCode, Result};
+use super::bitvec::Bitvec;
 
+#[derive(Debug)]
 pub enum MetadataType {
     StreamInfo,
-    Reserved
+    Padding,
+    Application,
+    Seektable,
+    VorbisComment,
+    Cuesheet,
+    Picture,
+    Reserved,
+    Invalid
 }
 
 impl From<u8> for MetadataType {
     fn from(u: u8) -> Self {
         match u {
             0 => MetadataType::StreamInfo,
-            _ => MetadataType::Reserved
+            1 => MetadataType::Padding,
+            2 => MetadataType::Application,
+            3 => MetadataType::Seektable,
+            4 => MetadataType::VorbisComment,
+            5 => MetadataType::Cuesheet,
+            6 => MetadataType::Picture,
+            7..=126 => MetadataType::Reserved,
+            _ => MetadataType::Invalid
         }
     }
 }
 
+#[derive(Debug)]
 pub struct MetadataHeader {
     pub last: bool,
     pub r#type: MetadataType,
-    pub length: usize
+    pub length_in_bytes: usize
 }
 
 impl MetadataHeader {
-    pub fn from_reader(reader: &mut BitRead) -> Result<Self> {
+    pub fn from_reader(reader: &mut Decode) -> Result<Self> {
         let last   = reader.read_bool()?;
         let r#type = reader.read_u8_bits(7)?;
         let length = reader.read_u32_bits(24)?;
         let header = MetadataHeader {
             last: last,
             r#type: MetadataType::from(r#type),
-            length: length as usize
+            length_in_bytes: length as usize
         };
         Ok(header)
+    }
+
+    pub fn skip_body(&self, reader: &mut Decode) -> Result<()> {
+        let mut vec = Bitvec::new();
+        reader.read_bitvec(&mut vec, self.length_in_bytes * 8)?;
+        Ok(())
     }
 }
 
@@ -50,7 +73,7 @@ pub struct StreamInfo {
 }
 
 impl StreamInfo {
-    pub fn from_reader(reader: &mut BitRead) -> Result<Self> {
+    pub fn from_reader(reader: &mut Decode) -> Result<Self> {
         let min_block_size  = reader.read_u16()?;
         let max_block_size  = reader.read_u16()?;
         let min_frame_size  = reader.read_u32_bits(24)?;

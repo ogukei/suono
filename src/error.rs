@@ -7,7 +7,9 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub enum ErrorCode {
     Io(io::Error),
-    WrongMagic
+    WrongMagic,
+    InvalidSyncCode,
+    InvalidFrameHeaderCrc
 }
 
 #[derive(Debug)]
