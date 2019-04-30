@@ -6,6 +6,7 @@ mod bits;
 mod error;
 mod stream;
 mod metadata;
+mod bitvec;
 
 use bits::*;
 use error::Result;
