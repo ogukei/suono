@@ -16,6 +16,7 @@ pub trait BitRead {
     fn read_u32_bits(&mut self, n: usize) -> Result<u32>;
     fn read_u64_bits(&mut self, n: usize) -> Result<u64>;
     fn read_bitvec(&mut self, v: &mut Bitvec, n: usize) -> Result<()>;
+    fn align_to_byte(&mut self);
 }
 
 pub struct BitReader<'a, Source> {
@@ -150,6 +151,11 @@ impl<'a, Source: Read> BitRead for BitReader<'a, Source> {
             vec.write_bits(u, n);
         }
         Ok(())
+    }
+
+    fn align_to_byte(&mut self) {
+        self.queue = 0;
+        self.queue_count = 0;
     }
 }
 

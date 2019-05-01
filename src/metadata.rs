@@ -17,17 +17,18 @@ pub enum MetadataType {
 
 impl MetadataType {
     fn parse(u: u8) -> Option<Self> {
-        match u {
-            0 => Some(MetadataType::StreamInfo),
-            1 => Some(MetadataType::Padding),
-            2 => Some(MetadataType::Application),
-            3 => Some(MetadataType::Seektable),
-            4 => Some(MetadataType::VorbisComment),
-            5 => Some(MetadataType::Cuesheet),
-            6 => Some(MetadataType::Picture),
-            7..=126 => Some(MetadataType::Reserved),
-            _ => None
-        }
+        let v = match u {
+            0 => MetadataType::StreamInfo,
+            1 => MetadataType::Padding,
+            2 => MetadataType::Application,
+            3 => MetadataType::Seektable,
+            4 => MetadataType::VorbisComment,
+            5 => MetadataType::Cuesheet,
+            6 => MetadataType::Picture,
+            7..=126 => MetadataType::Reserved,
+            _ => return None
+        };
+        Some(v)
     }
 }
 

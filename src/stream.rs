@@ -2,7 +2,7 @@
 use super::decode::Decode;
 use super::error::{Error, ErrorCode, Result};
 use super::metadata::{MetadataHeader, StreamInfo};
-use super::frame::{FrameHeader};
+use super::frame::{Frame};
 
 pub struct Stream {
 
@@ -27,8 +27,13 @@ impl Stream {
                 }
             }
         }
-        let frame_header = FrameHeader::from_reader(reader, &stream_info)?;
-        println!("{:?}", frame_header);
+        loop {
+            let frame = match Frame::from_reader(reader, &stream_info)? {
+                None => break,
+                Some(frame) => frame
+            };
+            println!("{:?}", frame);
+        }
         Ok(Stream { })
     }
 }

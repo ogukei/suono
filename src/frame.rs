@@ -3,6 +3,7 @@ use std::io;
 use super::error::{Error, ErrorCode, Result};
 use super::metadata::StreamInfo;
 use super::decode::Decode;
+use super::bitvec::Bitvec;
 
 #[derive(Debug)]
 pub struct Frame {
@@ -11,13 +12,33 @@ pub struct Frame {
 
 impl Frame {
     pub fn from_reader(reader: &mut Decode, stream_info: &StreamInfo) -> Result<Option<Self>> {
-        let header = FrameHeader::from_reader(reader, stream_info)?;
-        if let Some(header) = header {
-            let frame = Frame { header: header };
-            Ok(Some(frame))
-        } else {
-            Ok(None)
+        reader.compute_crc16_begin();
+        let header = match FrameHeader::from_reader(reader, stream_info)? {
+            None => {
+                reader.compute_crc16_end();
+                return Ok(None)
+            },
+            Some(header) => header
+        };
+        let mut vec: Vec<i32> = Vec::new();
+        match header.channel_assignment {
+            ChannelAssignment::Independent(num_channels) => {
+                for index in 0..num_channels {
+                    let subframe = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
+                    subframe.decode(reader, &mut vec)?;
+                }
+            },
+            _ => ()
         }
+        println!("{:?}", vec);
+        let frame = Frame { header: header };
+        reader.align_to_byte();
+        let actual_crc16 = reader.compute_crc16_end();
+        let expected_crc16 = reader.read_u16()?;
+        if actual_crc16 != expected_crc16 {
+            return Err(Error::from_code(ErrorCode::FrameCrcMismatch))
+        }
+        Ok(Some(frame))
     }
 }
 
@@ -65,14 +86,14 @@ impl FrameHeader {
             0b0111 => reader.read_u16()
                 .map(|x| (x as usize) + 1)
                 .map(|x| Some(x))?,
-            _ => None,
+            _ => None
         };
         // variable sample rate
         let _ = match sample_rate_bits {
-            0b1100 => reader.read_u8().map(|x| x as u16)?,
+            0b1100 => reader.read_u8()? as u16,
             0b1101 => reader.read_u16()?,
             0b1110 => reader.read_u16()?,
-            _ => 0u16,
+            _ => 0u16
         };
         // crc validate
         let actual_crc8 = reader.compute_crc8_end();
@@ -118,23 +139,47 @@ impl FrameHeader {
 // SUBFRAME
 #[derive(Debug)]
 struct Subframe {
-    header: SubframeHeader
+    method: PredictionMethod,
+    sample_size: usize,
+    num_samples: usize
 }
 
 impl Subframe {
-    fn from_reader(reader: &mut Decode) -> Result<Self> {
+    fn from_reader(reader: &mut Decode, sample_size: usize, block_size: usize) -> Result<Self> {
         let header = SubframeHeader::from_reader(reader)?;
-        Ok(Subframe { header: header })
+        let sample_size = sample_size - header.wasted_bits_per_sample;
+        let subframe = Subframe { 
+            method: header.method,
+            sample_size: sample_size,
+            num_samples: block_size
+        };
+        Ok(subframe)
+    }
+
+    fn decode(&self, reader: &mut Decode, vec: &mut Vec<i32>) -> Result<()> {
+        match self.method {
+            PredictionMethod::Constant => self.decode_constant(reader, vec),
+            _ => unreachable!()
+        }
+    }
+
+    fn decode_constant(&self, reader: &mut Decode, vec: &mut Vec<i32>) -> Result<()> {
+        let bps = self.sample_size;
+        let num_samples = self.num_samples;
+        let sample = sign_extend(reader.read_u64_bits(bps)?, bps) as i32;
+        let offset = vec.len();
+        vec.resize(offset + num_samples, sample);
+        Ok(())
     }
 }
 
 // SUBFRAME_HEADER
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum PredictionMethod {
     Constant,
     Verbatim,
     Fixed(usize),
-    FIR(usize)
+    Fir(usize)
 }
 
 impl PredictionMethod {
@@ -143,7 +188,7 @@ impl PredictionMethod {
             0b00_0000 => PredictionMethod::Constant,
             0b00_0001 => PredictionMethod::Verbatim,
             0b00_1000..=0b00_1111 => PredictionMethod::Fixed((n & 0b00_0111) as usize),
-            0b10_0000..=0b11_1111 => PredictionMethod::FIR(((n & 0b01_1111) as usize) + 1),
+            0b10_0000..=0b11_1111 => PredictionMethod::Fir(((n & 0b01_1111) as usize) + 1),
             _ => return None
         };
         Some(method)
@@ -165,7 +210,7 @@ impl SubframeHeader {
         }
         // Subframe type
         let method = PredictionMethod::parse(reader.read_u8_bits(6)?)
-            .ok_or(Error::from_code(ErrorCode::ReservedSubframeType))?;
+            .ok_or(Error::from_code(ErrorCode::SubframeReservedType))?;
         // 'Wasted bits-per-sample' flag
         let wasted_flag = reader.read_bool()?;
         let mut wasted_bits_per_sample: usize = 0;
@@ -212,5 +257,23 @@ impl ChannelAssignment {
             ChannelAssignment::RightSideStereo => 2,
             ChannelAssignment::MidSideStereo => 2
         }
+    }
+}
+
+fn sign_extend(x: u64, n: usize) -> i64 {
+    let m = 64 - n;
+    ((x << m) as i64) >> m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sign_extend() {
+        assert_eq!(sign_extend(0b110, 3), -2);
+        assert_eq!(sign_extend(0b10110011, 8), -77);
+        assert_eq!(sign_extend(0b001, 3), 1);
+        assert_eq!(sign_extend(0b00110011, 8), 51);
     }
 }

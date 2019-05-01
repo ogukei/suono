@@ -9,14 +9,15 @@ pub enum ErrorCode {
     Io(io::Error),
     WrongMagic,
     InvalidMetadataType,
-    
+
     FrameOutOfSync,
     FrameHeaderCrcMismatch,
     FrameSampleSizeUnknown,
     FrameBlockSizeUnknown,
     FrameChannelAssignmentUnknown,
+    FrameCrcMismatch,
 
-    ReservedSubframeType,
+    SubframeReservedType,
     SubframeOutOfSync
 }
 
