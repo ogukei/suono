@@ -45,7 +45,7 @@ impl MetadataHeader {
         let type_bits = reader.read_u8_bits(7)?;
         let length    = reader.read_u32_bits(24)?;
         let metadata_type = MetadataType::parse(type_bits)
-            .ok_or(Error::from_code(ErrorCode::InvalidMetadataType))?;
+            .ok_or_else(|| Error::from_code(ErrorCode::InvalidMetadataType))?;
         let header = MetadataHeader {
             last: last,
             metadata_type: metadata_type,

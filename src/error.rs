@@ -20,7 +20,10 @@ pub enum ErrorCode {
     SubframeReservedType,
     SubframeOutOfSync,
 
-    ResidualCodingMethodUnknown
+    ResidualCodingMethodUnknown,
+
+    FixedLPCCoefficientUnknown,
+    QLPPrecisionInvalid
 }
 
 #[derive(Debug)]

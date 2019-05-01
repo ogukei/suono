@@ -37,7 +37,11 @@ impl<'a> DecodingReadProxy<'a> {
 
 impl<'a> Read for DecodingReadProxy<'a> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let result = self.underlying.read(buf);
+        self.underlying.read(buf)
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        let result = self.underlying.read_exact(buf);
         if self.computing_crc8 {
             self.crc8.hash(buf);
         }

@@ -21,6 +21,7 @@ impl Frame {
             Some(header) => header
         };
         let mut vec: Vec<i32> = Vec::new();
+        // NOTE: bps varies by channel assignment
         match header.channel_assignment {
             ChannelAssignment::Independent(num_channels) => {
                 for index in 0..num_channels {
@@ -28,11 +29,29 @@ impl Frame {
                     subframe.decode(reader, &mut vec)?;
                 }
             },
-            _ => ()
+            ChannelAssignment::LeftSideStereo => {
+                let left = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
+                left.decode(reader, &mut vec)?;
+                let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
+                side.decode(reader, &mut vec)?;
+            },
+            ChannelAssignment::SideRightStereo => {
+                let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
+                side.decode(reader, &mut vec)?;
+                let right = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
+                right.decode(reader, &mut vec)?;
+            },
+            ChannelAssignment::MidSideStereo => {
+                let mid = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
+                mid.decode(reader, &mut vec)?;
+                let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
+                side.decode(reader, &mut vec)?;
+            }
         }
-        println!("{:?}", vec);
-        let frame = Frame { header: header };
+
         reader.align_to_byte();
+
+        let frame = Frame { header: header };
         let actual_crc16 = reader.compute_crc16_end();
         let expected_crc16 = reader.read_u16()?;
         if actual_crc16 != expected_crc16 {
@@ -126,11 +145,11 @@ impl FrameHeader {
         };
         let header = FrameHeader {
             sample_size: sample_size(sample_size_bits)
-                .ok_or(Error::from_code(ErrorCode::FrameSampleSizeUnknown))?,
+                .ok_or_else(|| Error::from_code(ErrorCode::FrameSampleSizeUnknown))?,
             block_size: block_size(block_size_bits)
-                .ok_or(Error::from_code(ErrorCode::FrameBlockSizeUnknown))?,
+                .ok_or_else(|| Error::from_code(ErrorCode::FrameBlockSizeUnknown))?,
             channel_assignment: ChannelAssignment::parse(channel_bits)
-                .ok_or(Error::from_code(ErrorCode::FrameChannelAssignmentUnknown))?
+                .ok_or_else(|| Error::from_code(ErrorCode::FrameChannelAssignmentUnknown))?
         };
         Ok(Some(header))
     }
@@ -147,6 +166,7 @@ struct Subframe {
 impl Subframe {
     fn from_reader(reader: &mut Decode, sample_size: usize, block_size: usize) -> Result<Self> {
         let header = SubframeHeader::from_reader(reader)?;
+        println!("{:?}", header);
         let sample_size = sample_size - header.wasted_bits_per_sample;
         let subframe = Subframe { 
             method: header.method,
@@ -160,7 +180,8 @@ impl Subframe {
         match self.method {
             PredictionMethod::Constant => self.decode_constant(reader, vec),
             PredictionMethod::Verbatim => self.decode_verbatim(reader, vec),
-            _ => unreachable!()
+            PredictionMethod::Fixed(order) => self.decode_fixed(reader, vec, order),
+            PredictionMethod::Fir(order) => self.decode_fir(reader, vec, order)
         }
     }
 
@@ -189,7 +210,19 @@ impl Subframe {
     // 3.2 Linear Prediction
     // @see http://svr-www.eng.cam.ac.uk/reports/abstracts/robinson_tr156.html
     fn decode_fixed(&self, reader: &mut Decode, vec: &mut Vec<i32>, order: usize) -> Result<()> {
-        
+        let bps = self.sample_size;
+        // unencoded warm-up samples
+        {
+            let offset = vec.len();
+            vec.resize(offset + order, 0);
+            let slice = &mut vec[offset..];
+            for sample in slice {
+                *sample = sign_extend(reader.read_u64_bits(bps)?, bps) as i32;
+            }
+        }
+        // subframe residuals
+        self.decode_residuals(reader, vec, order)?;
+        // LPC
         let obtain_coefficients = |order: usize| -> Option<Vec<i32>> {
             let v = match order {
                 1 => vec![1],
@@ -200,6 +233,46 @@ impl Subframe {
             };
             Some(v)
         };
+        let coefficients = obtain_coefficients(order)
+            .ok_or_else(|| Error::from_code(ErrorCode::FixedLPCCoefficientUnknown))?;
+        self.restore_signals(coefficients, 0, vec)?;
+        Ok(())
+    }
+
+    fn decode_fir(&self, reader: &mut Decode, vec: &mut Vec<i32>, order: usize) -> Result<()> {
+        let bps = self.sample_size;
+        // unencoded warm-up samples
+        {
+            let offset = vec.len();
+            vec.resize(offset + order, 0);
+            let slice = &mut vec[offset..];
+            for sample in slice {
+                *sample = sign_extend(reader.read_u64_bits(bps)?, bps) as i32;
+            }
+        }
+        // quantized linear predictor coefficients' precision in bits
+        let precision_bits = reader.read_u8_bits(4)?;
+        if precision_bits == 0b1111 {
+            return Err(Error::from_code(ErrorCode::QLPPrecisionInvalid))
+        }
+        let precision = (precision_bits as usize) + 1;
+        // quantized linear predictor coefficient shift needed in bits
+        let shift = sign_extend(reader.read_u64_bits(5)?, 5) as i32;
+        // unencoded predictor coefficients
+        let mut coefficients: Vec<i32> = Vec::new();
+        coefficients.resize(order, 0);
+        for coefficient in &mut coefficients[..] {
+            *coefficient = sign_extend(reader.read_u64_bits(precision)?, precision) as i32;
+        }
+        // subframe residuals
+        self.decode_residuals(reader, vec, order)?;
+        // LPC
+        self.restore_signals(coefficients, shift, vec)?;
+        Ok(())
+    }
+
+    fn restore_signals(&self, coefficients: Vec<i32>, shift: i32, vec: &mut Vec<i32>) -> Result<()> {
+        // TODO: 
         Ok(())
     }
 
@@ -229,6 +302,7 @@ impl Subframe {
         for i_partition in 0..num_partitions {
             let num_samples = determine_num_samples(i_partition == 0);
             let parameter = reader.read_u8_bits(depth)? as usize;
+            assert!(parameter != (escape as usize));
             // decode
             let offset = vec.len();
             vec.resize(offset + num_samples, 0);
@@ -278,7 +352,7 @@ impl SubframeHeader {
         }
         // Subframe type
         let method = PredictionMethod::parse(reader.read_u8_bits(6)?)
-            .ok_or(Error::from_code(ErrorCode::SubframeReservedType))?;
+            .ok_or_else(|| Error::from_code(ErrorCode::SubframeReservedType))?;
         // 'Wasted bits-per-sample' flag
         let wasted_flag = reader.read_bool()?;
         let mut wasted_bits_per_sample: usize = 0;
@@ -302,7 +376,7 @@ impl SubframeHeader {
 pub enum ChannelAssignment {
     Independent(usize),
     LeftSideStereo,
-    RightSideStereo,
+    SideRightStereo,
     MidSideStereo
 }
 
@@ -311,7 +385,7 @@ impl ChannelAssignment {
         let assignment = match n {
             0b0000..=0b0111 => ChannelAssignment::Independent((n as usize) + 1),
             0b1000 => ChannelAssignment::LeftSideStereo,
-            0b1001 => ChannelAssignment::RightSideStereo,
+            0b1001 => ChannelAssignment::SideRightStereo,
             0b1010 => ChannelAssignment::MidSideStereo,
             _ => return None
         };
@@ -322,7 +396,7 @@ impl ChannelAssignment {
         match *self {
             ChannelAssignment::Independent(num) => num,
             ChannelAssignment::LeftSideStereo => 2,
-            ChannelAssignment::RightSideStereo => 2,
+            ChannelAssignment::SideRightStereo => 2,
             ChannelAssignment::MidSideStereo => 2
         }
     }
