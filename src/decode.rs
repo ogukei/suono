@@ -4,7 +4,9 @@ use std::io::Read;
 use super::crc::{Hasher, HasherCrc8, HasherCrc16Buypass};
 use super::bits::{BitRead, BitReader};
 
-pub trait Decode: BitRead + DecodingRead {}
+pub trait Decode: BitRead + DecodingRead {
+    fn as_bitread_mut(&mut self) -> &mut BitRead;
+}
 
 pub trait DecodingRead {
     fn compute_crc8_begin(&mut self);
@@ -87,4 +89,42 @@ impl<'a, Source: DecodingRead> DecodingRead for BitReader<'a, Source> {
     }
 }
 
-impl<'a, Source: Read + DecodingRead> Decode for BitReader<'a, Source> {}
+impl<'a, Source: Read + DecodingRead> Decode for BitReader<'a, Source> {
+    fn as_bitread_mut(&mut self) -> &mut BitRead {
+        self
+    }
+}
+
+// Rice Decoding
+pub fn decode_rice(reader: &mut BitRead, parameter: usize) -> io::Result<i32> {
+    // unary decoding
+    let mut msb: u32 = 0;
+    while !reader.read_bool()? {
+        msb += 1;
+    }
+    let lsb = reader.read_u32_bits(parameter)?;
+    let v = ((msb << parameter) | lsb) as i32;
+    // convert to signed (zig-zag decoding)
+    Ok((v >> 1) ^ -(v & 1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rice() {
+        let mut bytes: &[u8] = &[0b1000_1001, 0b1010_1011, 
+                                 0b1100_0000, 0b1010_0000, 0b0000_0101];
+        let mut reader = BitReader::new(&mut bytes);
+        assert_eq!(decode_rice(&mut reader, 3).unwrap(), 0);
+        assert_eq!(decode_rice(&mut reader, 3).unwrap(), -1);
+        assert_eq!(decode_rice(&mut reader, 3).unwrap(), 1);
+        assert_eq!(decode_rice(&mut reader, 3).unwrap(), -2);
+        assert_eq!(decode_rice(&mut reader, 3).unwrap(), 2);
+        // (4 << 3) + 1
+        assert_eq!(decode_rice(&mut reader, 3).unwrap(), 17);
+        // -((9 << 2) + 1)
+        assert_eq!(decode_rice(&mut reader, 2).unwrap(), -19);
+    }
+}

@@ -2,7 +2,8 @@
 use std::io;
 use super::error::{Error, ErrorCode, Result};
 use super::metadata::StreamInfo;
-use super::decode::Decode;
+use super::decode::{Decode, decode_rice};
+use super::bits::BitRead;
 use super::bitvec::Bitvec;
 
 #[derive(Debug)]
@@ -141,7 +142,7 @@ impl FrameHeader {
 struct Subframe {
     method: PredictionMethod,
     sample_size: usize,
-    num_samples: usize
+    block_size: usize
 }
 
 impl Subframe {
@@ -151,7 +152,7 @@ impl Subframe {
         let subframe = Subframe { 
             method: header.method,
             sample_size: sample_size,
-            num_samples: block_size
+            block_size: block_size
         };
         Ok(subframe)
     }
@@ -159,16 +160,84 @@ impl Subframe {
     fn decode(&self, reader: &mut Decode, vec: &mut Vec<i32>) -> Result<()> {
         match self.method {
             PredictionMethod::Constant => self.decode_constant(reader, vec),
+            PredictionMethod::Verbatim => self.decode_verbatim(reader, vec),
             _ => unreachable!()
         }
     }
 
     fn decode_constant(&self, reader: &mut Decode, vec: &mut Vec<i32>) -> Result<()> {
         let bps = self.sample_size;
-        let num_samples = self.num_samples;
+        let num_samples = self.block_size;
         let sample = sign_extend(reader.read_u64_bits(bps)?, bps) as i32;
         let offset = vec.len();
         vec.resize(offset + num_samples, sample);
+        Ok(())
+    }
+
+    fn decode_verbatim(&self, reader: &mut Decode, vec: &mut Vec<i32>) -> Result<()> {
+        let bps = self.sample_size;
+        let num_samples = self.block_size;
+        let offset = vec.len();
+        vec.resize(offset + num_samples, 0);
+        let slice = &mut vec[offset..];
+        for sample in slice {
+            *sample = sign_extend(reader.read_u64_bits(bps)?, bps) as i32;
+        }
+        Ok(())
+    }
+
+    // SHORTEN: SIMPLE LOSSLESS AND NEAR-LOSSLESS WAVEFORM COMPRESSION
+    // 3.2 Linear Prediction
+    // @see http://svr-www.eng.cam.ac.uk/reports/abstracts/robinson_tr156.html
+    fn decode_fixed(&self, reader: &mut Decode, vec: &mut Vec<i32>, order: usize) -> Result<()> {
+        
+        let obtain_coefficients = |order: usize| -> Option<Vec<i32>> {
+            let v = match order {
+                1 => vec![1],
+                2 => vec![2, -1],
+                3 => vec![3, -3, 1],
+                4 => vec![4, -6, 4, -1],
+                _ => return None
+            };
+            Some(v)
+        };
+        Ok(())
+    }
+
+    fn decode_residuals(&self, reader: &mut Decode, vec: &mut Vec<i32>, predictor_order: usize) -> Result<()> {
+        let coding_method = reader.read_u8_bits(2)?;
+        // rice parameter bit depth varies by coding method
+        let depth = match coding_method {
+            0b00 => 4,
+            0b01 => 5,
+            _ => return Err(Error::from_code(ErrorCode::ResidualCodingMethodUnknown))
+        };
+        let partition_order = reader.read_u8_bits(4)?;
+        // determine the number of samples in the partition
+        let determine_num_samples = |first: bool| -> usize {
+            if partition_order == 0 {
+                return self.block_size - predictor_order;
+            }
+            // if this is not the first partition of the subframe
+            if !first {
+                return self.block_size >> partition_order;
+            }
+            return (self.block_size >> partition_order) - predictor_order;
+        };
+        // there will be 2^order partitions.
+        let num_partitions = 1 << (partition_order as i32);
+        let escape = (1u8 << depth) - 1;
+        for i_partition in 0..num_partitions {
+            let num_samples = determine_num_samples(i_partition == 0);
+            let parameter = reader.read_u8_bits(depth)? as usize;
+            // decode
+            let offset = vec.len();
+            vec.resize(offset + num_samples, 0);
+            let slice = &mut vec[offset..];
+            for sample in slice {
+                *sample = decode_rice(reader.as_bitread_mut(), parameter)?;
+            }
+        }
         Ok(())
     }
 }

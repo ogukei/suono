@@ -18,7 +18,9 @@ pub enum ErrorCode {
     FrameCrcMismatch,
 
     SubframeReservedType,
-    SubframeOutOfSync
+    SubframeOutOfSync,
+
+    ResidualCodingMethodUnknown
 }
 
 #[derive(Debug)]
