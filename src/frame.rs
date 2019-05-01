@@ -2,8 +2,7 @@
 use std::io;
 use super::error::{Error, ErrorCode, Result};
 use super::metadata::StreamInfo;
-use super::decode::{Decode, decode_rice};
-use super::bits::BitRead;
+use super::decode::Decode;
 use super::bitvec::Bitvec;
 
 #[derive(Debug)]
@@ -235,7 +234,7 @@ impl Subframe {
             vec.resize(offset + num_samples, 0);
             let slice = &mut vec[offset..];
             for sample in slice {
-                *sample = decode_rice(reader.as_bitread_mut(), parameter)?;
+                *sample = reader.decode_rice(parameter)?;
             }
         }
         Ok(())
