@@ -12,22 +12,21 @@ pub enum MetadataType {
     VorbisComment,
     Cuesheet,
     Picture,
-    Reserved,
-    Invalid
+    Reserved
 }
 
-impl From<u8> for MetadataType {
-    fn from(u: u8) -> Self {
+impl MetadataType {
+    fn parse(u: u8) -> Option<Self> {
         match u {
-            0 => MetadataType::StreamInfo,
-            1 => MetadataType::Padding,
-            2 => MetadataType::Application,
-            3 => MetadataType::Seektable,
-            4 => MetadataType::VorbisComment,
-            5 => MetadataType::Cuesheet,
-            6 => MetadataType::Picture,
-            7..=126 => MetadataType::Reserved,
-            _ => MetadataType::Invalid
+            0 => Some(MetadataType::StreamInfo),
+            1 => Some(MetadataType::Padding),
+            2 => Some(MetadataType::Application),
+            3 => Some(MetadataType::Seektable),
+            4 => Some(MetadataType::VorbisComment),
+            5 => Some(MetadataType::Cuesheet),
+            6 => Some(MetadataType::Picture),
+            7..=126 => Some(MetadataType::Reserved),
+            _ => None
         }
     }
 }
@@ -35,18 +34,20 @@ impl From<u8> for MetadataType {
 #[derive(Debug)]
 pub struct MetadataHeader {
     pub last: bool,
-    pub r#type: MetadataType,
+    pub metadata_type: MetadataType,
     pub length_in_bytes: usize
 }
 
 impl MetadataHeader {
     pub fn from_reader(reader: &mut Decode) -> Result<Self> {
-        let last   = reader.read_bool()?;
-        let r#type = reader.read_u8_bits(7)?;
-        let length = reader.read_u32_bits(24)?;
+        let last      = reader.read_bool()?;
+        let type_bits = reader.read_u8_bits(7)?;
+        let length    = reader.read_u32_bits(24)?;
+        let metadata_type = MetadataType::parse(type_bits)
+            .ok_or(Error::from_code(ErrorCode::InvalidMetadataType))?;
         let header = MetadataHeader {
             last: last,
-            r#type: MetadataType::from(r#type),
+            metadata_type: metadata_type,
             length_in_bytes: length as usize
         };
         Ok(header)

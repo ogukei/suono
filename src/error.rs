@@ -8,8 +8,16 @@ pub type Result<T> = result::Result<T, Error>;
 pub enum ErrorCode {
     Io(io::Error),
     WrongMagic,
-    InvalidSyncCode,
-    InvalidFrameHeaderCrc
+    InvalidMetadataType,
+    
+    FrameOutOfSync,
+    FrameHeaderCrcMismatch,
+    FrameSampleSizeUnknown,
+    FrameBlockSizeUnknown,
+    FrameChannelAssignmentUnknown,
+
+    ReservedSubframeType,
+    SubframeOutOfSync
 }
 
 #[derive(Debug)]
