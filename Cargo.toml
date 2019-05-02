@@ -5,3 +5,5 @@ authors = ["user"]
 edition = "2018"
 
 [dependencies]
+itertools = "0.8.0"
+hound = "3.4.0"

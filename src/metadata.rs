@@ -61,7 +61,7 @@ impl MetadataHeader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct StreamInfo {
     pub min_block_size: usize,
     pub max_block_size: usize,

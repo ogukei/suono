@@ -3,11 +3,10 @@ use std::io;
 use super::error::{Error, ErrorCode, Result};
 use super::metadata::StreamInfo;
 use super::decode::Decode;
-use super::bitvec::Bitvec;
 
-#[derive(Debug)]
 pub struct Frame {
-    header: FrameHeader
+    pub header: FrameHeader,
+    pub blocks: Vec<Vec<i32>>
 }
 
 impl Frame {
@@ -15,20 +14,23 @@ impl Frame {
         reader.compute_crc16_begin();
         let header = match FrameHeader::from_reader(reader, stream_info)? {
             None => {
+                // reached the end of file
                 reader.compute_crc16_end();
                 return Ok(None)
             },
             Some(header) => header
         };
-
         // NOTE: bps varies by channel assignment
-        match header.channel_assignment {
+        let blocks = match header.channel_assignment {
             ChannelAssignment::Independent(num_channels) => {
-                for index in 0..num_channels {
+                let mut blocks: Vec<Vec<i32>> = Vec::new();
+                for _ in 0..num_channels {
                     let mut vec: Vec<i32> = Vec::new();
                     let subframe = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
                     subframe.decode(reader, &mut vec)?;
+                    blocks.push(vec);
                 }
+                blocks
             },
             ChannelAssignment::LeftSideStereo => {
                 let mut left_vec: Vec<i32> = Vec::new();
@@ -41,6 +43,7 @@ impl Frame {
                 for (left, side) in left_vec.iter().zip(side_vec.iter_mut()) {
                     *side = *left - *side;
                 }
+                vec![left_vec, side_vec]
             },
             ChannelAssignment::SideRightStereo => {
                 let mut side_vec: Vec<i32> = Vec::new();
@@ -53,6 +56,7 @@ impl Frame {
                 for (side, right) in side_vec.iter_mut().zip(right_vec.iter()) {
                     *side += *right;
                 }
+                vec![side_vec, right_vec]
             },
             ChannelAssignment::MidSideStereo => {
                 let mut mid_vec: Vec<i32> = Vec::new();
@@ -68,17 +72,18 @@ impl Frame {
                     *mid = (m + s) / 2;
                     *side = (m - s) / 2;
                 }
+                vec![mid_vec, side_vec]
             }
-        }
-
+        };
+        // zero-padding to byte alignment
         reader.align_to_byte();
-
-        let frame = Frame { header: header };
+        // verify crc
         let actual_crc16 = reader.compute_crc16_end();
         let expected_crc16 = reader.read_u16()?;
         if actual_crc16 != expected_crc16 {
             return Err(Error::from_code(ErrorCode::FrameCrcMismatch))
         }
+        let frame = Frame { header: header, blocks: blocks };
         Ok(Some(frame))
     }
 }
@@ -106,13 +111,13 @@ impl FrameHeader {
             }
         };
         // parameters
-        let _zero             = reader.read_bool()?;
-        let blocking_strategy = reader.read_u8_bits(1)?;
-        let block_size_bits   = reader.read_u8_bits(4)?;
-        let sample_rate_bits  = reader.read_u8_bits(4)?;
-        let channel_bits      = reader.read_u8_bits(4)?;
-        let sample_size_bits  = reader.read_u8_bits(3)?;
-        let _reserved         = reader.read_bool()?;
+        let _zero              = reader.read_bool()?;
+        let _blocking_strategy = reader.read_u8_bits(1)?;
+        let block_size_bits    = reader.read_u8_bits(4)?;
+        let sample_rate_bits   = reader.read_u8_bits(4)?;
+        let channel_bits       = reader.read_u8_bits(4)?;
+        let sample_size_bits   = reader.read_u8_bits(3)?;
+        let _reserved          = reader.read_bool()?;
         // skip utf-8 coded
         let mut v1: u32 = reader.read_u8()? as u32;
         while v1 >= 0b1100_0000 {
@@ -188,7 +193,6 @@ struct Subframe {
 impl Subframe {
     fn from_reader(reader: &mut Decode, sample_size: usize, block_size: usize) -> Result<Self> {
         let header = SubframeHeader::from_reader(reader)?;
-        println!("{:?}", header);
         let sample_size = sample_size - header.wasted_bits_per_sample;
         let subframe = Subframe { 
             method: header.method,
@@ -247,6 +251,7 @@ impl Subframe {
         // LPC
         let obtain_coefficients = |order: usize| -> Option<Vec<i32>> {
             let v = match order {
+                0 => vec![],
                 1 => vec![1],
                 2 => vec![2, -1],
                 3 => vec![3, -3, 1],
@@ -421,15 +426,6 @@ impl ChannelAssignment {
             _ => return None
         };
         Some(assignment)
-    }
-
-    pub fn number_of_channels(&self) -> usize {
-        match *self {
-            ChannelAssignment::Independent(num) => num,
-            ChannelAssignment::LeftSideStereo => 2,
-            ChannelAssignment::SideRightStereo => 2,
-            ChannelAssignment::MidSideStereo => 2
-        }
     }
 }
 
