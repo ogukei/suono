@@ -23,7 +23,8 @@ pub enum ErrorCode {
     ResidualCodingMethodUnknown,
 
     FixedLPCCoefficientUnknown,
-    QLPPrecisionInvalid
+    QLPPrecisionInvalid,
+    LPCSignalRestoreFailure
 }
 
 #[derive(Debug)]
