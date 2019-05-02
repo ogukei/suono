@@ -20,32 +20,54 @@ impl Frame {
             },
             Some(header) => header
         };
-        let mut vec: Vec<i32> = Vec::new();
+
         // NOTE: bps varies by channel assignment
         match header.channel_assignment {
             ChannelAssignment::Independent(num_channels) => {
                 for index in 0..num_channels {
+                    let mut vec: Vec<i32> = Vec::new();
                     let subframe = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
                     subframe.decode(reader, &mut vec)?;
                 }
             },
             ChannelAssignment::LeftSideStereo => {
+                let mut left_vec: Vec<i32> = Vec::new();
                 let left = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                left.decode(reader, &mut vec)?;
+                left.decode(reader, &mut left_vec)?;
+                let mut side_vec: Vec<i32> = Vec::new();
                 let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
-                side.decode(reader, &mut vec)?;
+                side.decode(reader, &mut side_vec)?;
+                // correlate
+                for (left, side) in left_vec.iter().zip(side_vec.iter_mut()) {
+                    *side = *left - *side;
+                }
             },
             ChannelAssignment::SideRightStereo => {
+                let mut side_vec: Vec<i32> = Vec::new();
                 let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
-                side.decode(reader, &mut vec)?;
+                side.decode(reader, &mut side_vec)?;
+                let mut right_vec: Vec<i32> = Vec::new();
                 let right = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                right.decode(reader, &mut vec)?;
+                right.decode(reader, &mut right_vec)?;
+                // correlate
+                for (side, right) in side_vec.iter_mut().zip(right_vec.iter()) {
+                    *side += *right;
+                }
             },
             ChannelAssignment::MidSideStereo => {
+                let mut mid_vec: Vec<i32> = Vec::new();
                 let mid = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                mid.decode(reader, &mut vec)?;
+                mid.decode(reader, &mut mid_vec)?;
+                let mut side_vec: Vec<i32> = Vec::new();
                 let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
-                side.decode(reader, &mut vec)?;
+                side.decode(reader, &mut side_vec)?;
+                // correlate
+                for (mid, side) in mid_vec.iter_mut().zip(side_vec.iter_mut()) {
+                    let s = *side;
+                    let m = (*mid * 2) | (s & 1);
+                    *mid = (m + s) / 2;
+                    *side = (m - s) / 2;
+                }
             }
         }
 
@@ -235,7 +257,7 @@ impl Subframe {
         };
         let coefficients = obtain_coefficients(order)
             .ok_or_else(|| Error::from_code(ErrorCode::FixedLPCCoefficientUnknown))?;
-        self.restore_signals(coefficients, 0, vec)?;
+        self.restore_signals(coefficients, 0, order, vec)?;
         Ok(())
     }
 
@@ -267,12 +289,21 @@ impl Subframe {
         // subframe residuals
         self.decode_residuals(reader, vec, order)?;
         // LPC
-        self.restore_signals(coefficients, shift, vec)?;
+        self.restore_signals(coefficients, shift, order, vec)?;
         Ok(())
     }
 
-    fn restore_signals(&self, coefficients: Vec<i32>, shift: i32, vec: &mut Vec<i32>) -> Result<()> {
-        // TODO: 
+    fn restore_signals(&self, coefficients: Vec<i32>, shift: i32, order: usize, vec: &mut Vec<i32>) -> Result<()> {
+        if coefficients.len() != order || vec.len() != self.block_size || shift < 0 {
+            return Err(Error::from_code(ErrorCode::LPCSignalRestoreFailure))
+        }
+        for i in order..self.block_size {
+            let mut sample: i64 = 0;
+            for (j, coeff) in coefficients.iter().enumerate() {
+                sample += (*coeff as i64) * (vec[i-j-1] as i64);
+            }
+            vec[i] += (sample >> shift) as i32
+        }
         Ok(())
     }
 
