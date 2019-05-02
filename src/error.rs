@@ -7,7 +7,23 @@ pub type Result<T> = result::Result<T, Error>;
 #[derive(Debug)]
 pub enum ErrorCode {
     Io(io::Error),
-    WrongMagic
+    WrongMagic,
+    InvalidMetadataType,
+
+    FrameOutOfSync,
+    FrameHeaderCrcMismatch,
+    FrameSampleSizeUnknown,
+    FrameBlockSizeUnknown,
+    FrameChannelAssignmentUnknown,
+    FrameCrcMismatch,
+
+    SubframeReservedType,
+    SubframeOutOfSync,
+
+    ResidualCodingMethodUnknown,
+
+    FixedLPCCoefficientUnknown,
+    QLPPrecisionInvalid
 }
 
 #[derive(Debug)]
