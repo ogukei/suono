@@ -2,7 +2,7 @@
 use std::io::Read;
 use std::io::Result;
 
-use super::bitvec::{Bitvec, BitvecBlock};
+use super::bitvec::Bitvec;
 
 pub trait BitRead {
     fn read_bool(&mut self) -> Result<bool>;
