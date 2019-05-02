@@ -162,6 +162,7 @@ impl<'a, Source: Read> BitRead for BitReader<'a, Source> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::bitvec::BitvecBlock;
 
     #[test]
     fn test_flac_magic() {
