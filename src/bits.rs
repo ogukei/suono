@@ -19,7 +19,6 @@ pub trait BitRead {
     fn align_to_byte(&mut self);
 
     fn read_unary(&mut self) -> Result<u32>;
-    fn read_unary32(&mut self) -> Result<u32>;
 }
 
 pub struct BitReader<'a, Source> {
@@ -197,48 +196,12 @@ impl<'a, Source: Read> BitRead for BitReader<'a, Source> {
         self.queue_count = new_count;
         Ok(n + u)
     }
-
-    fn read_unary32(&mut self) -> Result<u32> {
-        // overload queue (this is actually an unsafe operation. may overrun the entire buffer)
-        // plenish at least 32bit
-        let mut v: u64 = self.read_value(32)?;
-        let unary = (v as u32).leading_zeros();
-        // trim msbs
-        let n = 32 - (unary + 1);
-        v = v & ((1u64 << n) - 1);
-        // concat the existing queue
-        self.queue = (v << self.queue_count) | self.queue;
-        self.queue_count += n as isize;
-        Ok(unary)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use super::super::bitvec::BitvecBlock;
-
-    #[test]
-    fn test_unary() {
-        let mut bytes: &[u8] = &[0b10110110, 0b11001100, 0b11110110, 0b11001001,
-                                 0b10001001, 0b11101101, 0b01001000, 0b01011001, 0b01011001];
-        let mut reader = BitReader::new(&mut bytes);
-        assert_eq!(reader.read_unary().unwrap(), 0);
-        assert_eq!(reader.read_unary().unwrap(), 1);
-        assert_eq!(reader.read_unary().unwrap(), 0);
-        assert_eq!(reader.read_unary().unwrap(), 1);
-    }
-
-    #[test]
-    fn test_unary32() {
-        let mut bytes: &[u8] = &[0b10110110, 0b11001100, 0b11110110, 0b11001001,
-                                 0b10001001, 0b11101101, 0b01001000, 0b01011001, 0b01011001];
-        let mut reader = BitReader::new(&mut bytes);
-        assert_eq!(reader.read_unary32().unwrap(), 0);
-        assert_eq!(reader.read_unary32().unwrap(), 1);
-        assert_eq!(reader.read_unary32().unwrap(), 0);
-        assert_eq!(reader.read_unary32().unwrap(), 1);
-    }
 
     #[test]
     fn test_flac_magic() {
@@ -288,6 +251,19 @@ mod tests {
         assert_eq!(reader.read_u64_bits(1).unwrap(), 0b1);
         assert_eq!(reader.read_u64_bits(1).unwrap(), 0b1);
         assert_eq!(reader.read_u64_bits(1).unwrap(), 0b0);
+    }
+
+    #[test]
+    fn test_unary() {
+        let mut bytes: &[u8] = &[0b10110111];
+        let mut reader = BitReader::new(&mut bytes);
+        assert_eq!(reader.read_unary().unwrap(), 0);
+        assert_eq!(reader.read_unary().unwrap(), 1);
+        assert_eq!(reader.read_unary().unwrap(), 0);
+        assert_eq!(reader.read_unary().unwrap(), 1);
+        assert_eq!(reader.read_unary().unwrap(), 0);
+        assert_eq!(reader.read_unary().unwrap(), 0);
+        // TODO: add more cases
     }
 
     #[test]

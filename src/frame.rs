@@ -4,13 +4,13 @@ use super::error::{Error, ErrorCode, Result};
 use super::metadata::StreamInfo;
 use super::decode::Decode;
 
-pub struct Frame {
+pub struct Frame<'a> {
     pub header: FrameHeader,
-    pub blocks: Vec<Vec<i32>>
+    pub blocks: &'a mut Vec<Vec<i32>>
 }
 
-impl Frame {
-    pub fn from_reader(reader: &mut Decode, stream_info: &StreamInfo) -> Result<Option<Self>> {
+impl<'a> Frame<'a> {
+    pub fn from_reader(reader: &mut Decode, stream_info: &StreamInfo, blocks: &'a mut Vec<Vec<i32>>) -> Result<Option<Self>> {
         reader.compute_crc16_begin();
         let header = match FrameHeader::from_reader(reader, stream_info)? {
             None => {
@@ -21,58 +21,59 @@ impl Frame {
             Some(header) => header
         };
         // NOTE: bps varies by channel assignment
-        let blocks = match header.channel_assignment {
+        match header.channel_assignment {
             ChannelAssignment::Independent(num_channels) => {
-                let mut blocks: Vec<Vec<i32>> = Vec::new();
-                for _ in 0..num_channels {
-                    let mut vec: Vec<i32> = Vec::new();
+                for i in 0..num_channels {
+                    let block = blocks.get_mut(i)
+                        .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
                     let subframe = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                    subframe.decode(reader, &mut vec)?;
-                    blocks.push(vec);
+                    subframe.decode(reader, block)?;
                 }
-                blocks
             },
             ChannelAssignment::LeftSideStereo => {
-                let mut left_vec: Vec<i32> = Vec::new();
+                let (left_vec, tail) = blocks.split_first_mut()
+                    .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
+                let side_vec = tail.first_mut()
+                    .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
                 let left = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                left.decode(reader, &mut left_vec)?;
-                let mut side_vec: Vec<i32> = Vec::new();
+                left.decode(reader, left_vec)?;
                 let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
-                side.decode(reader, &mut side_vec)?;
+                side.decode(reader, side_vec)?;
                 // correlate
-                for (left, side) in left_vec.iter().zip(side_vec.iter_mut()) {
+                for (left, side) in left_vec.iter_mut().zip(side_vec) {
                     *side = *left - *side;
                 }
-                vec![left_vec, side_vec]
             },
             ChannelAssignment::SideRightStereo => {
-                let mut side_vec: Vec<i32> = Vec::new();
+                let (side_vec, tail) = blocks.split_first_mut()
+                    .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
+                let right_vec = tail.first_mut()
+                    .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
                 let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
-                side.decode(reader, &mut side_vec)?;
-                let mut right_vec: Vec<i32> = Vec::new();
+                side.decode(reader, side_vec)?;
                 let right = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                right.decode(reader, &mut right_vec)?;
+                right.decode(reader, right_vec)?;
                 // correlate
-                for (side, right) in side_vec.iter_mut().zip(right_vec.iter()) {
+                for (side, right) in side_vec.iter_mut().zip(right_vec) {
                     *side += *right;
                 }
-                vec![side_vec, right_vec]
             },
             ChannelAssignment::MidSideStereo => {
-                let mut mid_vec: Vec<i32> = Vec::new();
+                let (mid_vec, tail) = blocks.split_first_mut()
+                    .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
+                let side_vec = tail.first_mut()
+                    .ok_or_else(|| Error::from_code(ErrorCode::FrameBufferUnallocated))?;
                 let mid = Subframe::from_reader(reader, header.sample_size, header.block_size)?;
-                mid.decode(reader, &mut mid_vec)?;
-                let mut side_vec: Vec<i32> = Vec::new();
+                mid.decode(reader, mid_vec)?;
                 let side = Subframe::from_reader(reader, header.sample_size + 1, header.block_size)?;
-                side.decode(reader, &mut side_vec)?;
+                side.decode(reader, side_vec)?;
                 // correlate
-                for (mid, side) in mid_vec.iter_mut().zip(side_vec.iter_mut()) {
+                for (mid, side) in mid_vec.iter_mut().zip(side_vec) {
                     let s = *side;
                     let m = (*mid * 2) | (s & 1);
                     *mid = (m + s) / 2;
                     *side = (m - s) / 2;
                 }
-                vec![mid_vec, side_vec]
             }
         };
         // zero-padding to byte alignment
@@ -342,22 +343,9 @@ impl Subframe {
             // decode
             let offset = vec.len();
             vec.resize(offset + num_samples, 0);
-
-            if num_samples > 32 {
-                let split = offset + num_samples - 32;
-                let former = &mut vec[offset..split];
-                for sample in former {
-                    *sample = reader.decode_rice_aggressive(parameter)?;
-                }
-                let latter = &mut vec[split..];
-                for sample in latter {
-                    *sample = reader.decode_rice(parameter)?;
-                }
-            } else {
-                let slice = &mut vec[offset..];
-                for sample in slice {
-                    *sample = reader.decode_rice(parameter)?;
-                }
+            let slice = &mut vec[offset..];
+            for sample in slice {
+                *sample = reader.decode_rice(parameter)?;
             }
         }
         Ok(())
