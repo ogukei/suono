@@ -97,10 +97,7 @@ impl<'a, Source: Read + DecodingRead> Decode for BitReader<'a, Source> {
     // Rice Decoding
     fn decode_rice(&mut self, parameter: usize) -> io::Result<i32> {
         // unary decoding
-        let mut msb: u32 = 0;
-        while !self.read_bool()? {
-            msb += 1;
-        }
+        let msb: u32 = self.read_unary()?;
         let lsb = self.read_u32_bits(parameter)?;
         let v = ((msb << parameter) | lsb) as i32;
         // convert to signed (zig-zag decoding)

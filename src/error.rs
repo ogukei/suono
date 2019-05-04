@@ -24,7 +24,9 @@ pub enum ErrorCode {
 
     FixedLPCCoefficientUnknown,
     QLPPrecisionInvalid,
-    LPCSignalRestoreFailure
+    LPCSignalRestoreFailure,
+
+    FrameBufferUnallocated
 }
 
 #[derive(Debug)]

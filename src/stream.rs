@@ -30,12 +30,19 @@ impl Stream {
 
     pub fn decode_frames<F>(&self, reader: &mut Decode, mut sink: F) -> Result<()>
         where F: FnMut(&Frame) -> () {
+        // allocate buffer in advance
+        let mut blocks: Vec<Vec<i32>> = Vec::new();
+        let buffer_capacity = self.stream_info.max_block_size;
+        blocks.resize_with(self.stream_info.number_of_channels, || Vec::with_capacity(buffer_capacity));
         loop {
-            let frame = match Frame::from_reader(reader, &self.stream_info)? {
+            let frame = match Frame::from_reader(reader, &self.stream_info, &mut blocks)? {
                 None => break,
                 Some(frame) => frame
             };
             sink(&frame);
+            for block in &mut blocks[..] {
+                block.clear();
+            }
         }
         Ok(())
     }
