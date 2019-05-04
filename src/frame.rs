@@ -342,9 +342,22 @@ impl Subframe {
             // decode
             let offset = vec.len();
             vec.resize(offset + num_samples, 0);
-            let slice = &mut vec[offset..];
-            for sample in slice {
-                *sample = reader.decode_rice(parameter)?;
+
+            if num_samples > 32 {
+                let split = offset + num_samples - 32;
+                let former = &mut vec[offset..split];
+                for sample in former {
+                    *sample = reader.decode_rice_aggressive(parameter)?;
+                }
+                let latter = &mut vec[split..];
+                for sample in latter {
+                    *sample = reader.decode_rice(parameter)?;
+                }
+            } else {
+                let slice = &mut vec[offset..];
+                for sample in slice {
+                    *sample = reader.decode_rice(parameter)?;
+                }
             }
         }
         Ok(())

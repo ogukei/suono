@@ -17,6 +17,9 @@ pub trait BitRead {
     fn read_u64_bits(&mut self, n: usize) -> Result<u64>;
     fn read_bitvec(&mut self, v: &mut Bitvec, n: usize) -> Result<()>;
     fn align_to_byte(&mut self);
+
+    fn read_unary(&mut self) -> Result<u32>;
+    fn read_unary32(&mut self) -> Result<u32>;
 }
 
 pub struct BitReader<'a, Source> {
@@ -120,6 +123,7 @@ impl<'a, Source: Read> BitRead for BitReader<'a, Source> {
     }
 
     fn read_bitvec(&mut self, vec: &mut Bitvec, n: usize) -> Result<()> {
+        assert!(self.queue_count < 8);
         let queue = self.queue;
         let n_bits = (n as isize) - self.queue_count;
         if n_bits > 0 {
@@ -157,12 +161,84 @@ impl<'a, Source: Read> BitRead for BitReader<'a, Source> {
         self.queue = 0;
         self.queue_count = 0;
     }
+
+    fn read_unary(&mut self) -> Result<u32> {
+        // consume queue
+        let mut n: u32 = 0;
+        if self.queue_count > 0 {
+            if self.queue == 0 {
+                n = self.queue_count as u32;
+                self.queue = 0;
+                self.queue_count = 0;
+            } else {
+                let v = self.queue << (64 - self.queue_count);
+                let unary = v.leading_zeros();
+                let new_count = self.queue_count - (unary + 1) as isize;
+                self.queue &= (1u64 << new_count) - 1;
+                self.queue_count = new_count;
+                return Ok(unary);
+            }
+        }
+        assert_eq!(self.queue_count, 0);
+        let mut v: u8;
+        loop {
+            let mut array: [u8; 1] = [0u8; 1];
+            self.source.read_exact(&mut array[..])?;
+            v = u8::from_be_bytes(array);
+            if v != 0 {
+                break;
+            }
+            n += 8;
+        }
+        let u = v.leading_zeros();
+        let new_count = (8 - (u + 1)) as isize;
+        let mask = (1u64 << new_count) - 1;
+        self.queue = (v as u64) & mask;
+        self.queue_count = new_count;
+        Ok(n + u)
+    }
+
+    fn read_unary32(&mut self) -> Result<u32> {
+        // overload queue (this is actually an unsafe operation. may overrun the entire buffer)
+        // plenish at least 32bit
+        let mut v: u64 = self.read_value(32)?;
+        let unary = (v as u32).leading_zeros();
+        // trim msbs
+        let n = 32 - (unary + 1);
+        v = v & ((1u64 << n) - 1);
+        // concat the existing queue
+        self.queue = (v << self.queue_count) | self.queue;
+        self.queue_count += n as isize;
+        Ok(unary)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use super::super::bitvec::BitvecBlock;
+
+    #[test]
+    fn test_unary() {
+        let mut bytes: &[u8] = &[0b10110110, 0b11001100, 0b11110110, 0b11001001,
+                                 0b10001001, 0b11101101, 0b01001000, 0b01011001, 0b01011001];
+        let mut reader = BitReader::new(&mut bytes);
+        assert_eq!(reader.read_unary().unwrap(), 0);
+        assert_eq!(reader.read_unary().unwrap(), 1);
+        assert_eq!(reader.read_unary().unwrap(), 0);
+        assert_eq!(reader.read_unary().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_unary32() {
+        let mut bytes: &[u8] = &[0b10110110, 0b11001100, 0b11110110, 0b11001001,
+                                 0b10001001, 0b11101101, 0b01001000, 0b01011001, 0b01011001];
+        let mut reader = BitReader::new(&mut bytes);
+        assert_eq!(reader.read_unary32().unwrap(), 0);
+        assert_eq!(reader.read_unary32().unwrap(), 1);
+        assert_eq!(reader.read_unary32().unwrap(), 0);
+        assert_eq!(reader.read_unary32().unwrap(), 1);
+    }
 
     #[test]
     fn test_flac_magic() {
