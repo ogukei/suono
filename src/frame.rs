@@ -250,21 +250,63 @@ impl Subframe {
         // subframe residuals
         self.decode_residuals(reader, vec, order)?;
         // LPC
-        let obtain_coefficients = |order: usize| -> Option<Vec<i32>> {
-            let v = match order {
-                0 => vec![],
-                1 => vec![1],
-                2 => vec![2, -1],
-                3 => vec![3, -3, 1],
-                4 => vec![4, -6, 4, -1],
-                _ => return None
-            };
-            Some(v)
-        };
-        let coefficients = obtain_coefficients(order)
-            .ok_or_else(|| Error::from_code(ErrorCode::FixedLPCCoefficientUnknown))?;
-        self.restore_signals(coefficients, 0, order, vec)?;
+        match order {
+            0 => (),
+            1 => self.decode_fixed_order1(vec),
+            2 => self.decode_fixed_order2(vec),
+            3 => self.decode_fixed_order3(vec),
+            4 => self.decode_fixed_order4(vec),
+            _ => return Err(Error::from_code(ErrorCode::FixedLPCCoefficientUnknown))
+        }
         Ok(())
+    }
+
+    fn decode_fixed_order1(&self, vec: &mut Vec<i32>) {
+        let block_size = self.block_size;
+        let mut q = vec[0];
+        for v in &mut vec[1..block_size] {
+            q += *v;
+            *v = q;
+        }
+    }
+
+    fn decode_fixed_order2(&self, vec: &mut Vec<i32>) {
+        let block_size = self.block_size;
+        let mut c0 = vec[1] - vec[0];
+        let mut q = vec[1];
+        for v in &mut vec[2..block_size] {
+            c0 += *v;
+            q += c0;
+            *v = q;
+        }
+    }
+
+    fn decode_fixed_order3(&self, vec: &mut Vec<i32>) {
+        let block_size = self.block_size;
+        let mut c0 = vec[2] - 2 * vec[1] + vec[0];
+        let mut c1 = vec[2] - vec[1];
+        let mut q = vec[2];
+        for v in &mut vec[3..block_size] {
+            c0 += *v;
+            c1 += c0;
+            q += c1;
+            *v = q;
+        }
+    }
+
+    fn decode_fixed_order4(&self, vec: &mut Vec<i32>) {
+        let block_size = self.block_size;
+        let mut c0 = vec[3] - 3 * vec[2] + 3 * vec[1] - vec[0];
+        let mut c1 = vec[3] - 2 * vec[2] + vec[1];
+        let mut c2 = vec[3] - vec[2];
+        let mut q = vec[3];
+        for v in &mut vec[4..block_size] {
+            c0 += *v;
+            c1 += c0;
+            c2 += c1;
+            q += c2;
+            *v = q;
+        }
     }
 
     fn decode_fir(&self, reader: &mut Decode, vec: &mut Vec<i32>, order: usize) -> Result<()> {
